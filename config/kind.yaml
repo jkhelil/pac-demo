@@ -1,0 +1,10 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: tekton-cluster
+
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30097   # must match your Service nodePort
+        hostPort: 30097
+        protocol: TCP

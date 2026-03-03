@@ -1,11 +1,12 @@
+# PAC demo - triggers on push to main
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
-  generateName: pac-demo-pr-
+  generateName: pac-demo-push-
   annotations:
-    pipelinesascode.tekton.dev/on-event: "[pull_request]"
-    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    pipelinesascode.tekton.dev/cancel-in-progress: "true"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
+    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch == "main"
 spec:
   serviceAccountName: pipeline
   workspaces:
@@ -25,7 +26,7 @@ spec:
     value: "{{repo_url}}"
   - name: repo_revision
     value: "{{revision}}"
-  - name: repo_short_sha
+  - name: image_tag
     value: "{{revision}}"
 
   tasks:
@@ -120,7 +121,7 @@ spec:
         value: task
     params:
     - name: IMAGE
-      value: ghcr.io/jkhelil/pac-demo:$(params.repo_short_sha)
+      value: ghcr.io/jkhelil/pac-demo:$(params.image_tag)
     - name: DOCKERFILE
       value: ./Dockerfile
     - name: CONTEXT
@@ -149,7 +150,7 @@ spec:
       value:
       - image
     - name: IMAGE_PATH
-      value: ghcr.io/jkhelil/pac-demo:$(params.repo_short_sha)
+      value: ghcr.io/jkhelil/pac-demo:$(params.image_tag)
     workspaces:
     - name: manifest-dir
       workspace: source
@@ -171,8 +172,7 @@ spec:
     - name: git-url
       value: $(tasks.clone.results.url)?rev=$(tasks.clone.results.commit)
     - name: image-url
-      value: ghcr.io/jkhelil/pac-demo:$(params.repo_short_sha)
+      value: ghcr.io/jkhelil/pac-demo:$(params.image_tag)
     workspaces:
     - name: workspace
       workspace: source
-

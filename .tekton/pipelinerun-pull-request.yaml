@@ -1,0 +1,178 @@
+# PAC demo - triggers on pull_request to main
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: pac-demo-pr-
+  annotations:
+    pipelinesascode.tekton.dev/cancel-in-progress: "true"
+    pipelinesascode.tekton.dev/max-keep-runs: "3"
+    pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch == "main"
+spec:
+  serviceAccountName: pipeline
+  workspaces:
+  - name: source
+    volumeClaimTemplate:
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+  - name: dockerconfig
+    secret:
+      secretName: ghcr-creds
+
+  params:
+  - name: repo_url
+    value: "{{repo_url}}"
+  - name: repo_revision
+    value: "{{revision}}"
+  - name: image_tag
+    value: "pr-{{revision}}"
+
+  tasks:
+  - name: clone
+    taskRef:
+      resolver: bundles
+      params:
+      - name: name
+        value: git-clone
+      - name: bundle
+        value: gcr.io/tekton-releases/catalog/upstream/git-clone:0.9
+      - name: kind
+        value: task
+    params:
+    - name: url
+      value: $(params.repo_url)
+    - name: revision
+      value: $(params.repo_revision)
+    workspaces:
+    - name: output
+      workspace: source
+
+  - name: unit-tests
+    runAfter: ["clone"]
+    taskSpec:
+      workspaces:
+      - name: source
+      steps:
+      - name: go-test
+        image: golang:1.22
+        workingDir: /workspace/source
+        script: |
+          set -eu
+          go test ./...
+    workspaces:
+    - name: source
+      workspace: source
+
+  - name: trivy-source-scan
+    runAfter: ["unit-tests"]
+    taskRef:
+      resolver: bundles
+      params:
+      - name: name
+        value: trivy-scanner
+      - name: bundle
+        value: gcr.io/tekton-releases/catalog/upstream/trivy-scanner:0.1
+      - name: kind
+        value: task
+    params:
+    - name: ARGS
+      value:
+      - filesystem
+    - name: IMAGE_PATH
+      value: "."
+    workspaces:
+    - name: manifest-dir
+      workspace: source
+
+  - name: snyk-code
+    runAfter: ["trivy-source-scan"]
+    taskSpec:
+      workspaces:
+      - name: source
+      steps:
+      - name: snyk
+        image: snyk/snyk:docker
+        workingDir: /workspace/source
+        env:
+        - name: SNYK_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: snyk-token
+              key: SNYK_TOKEN
+        script: |
+          set -eu
+          snyk code test --severity-threshold=medium || snyk test --all-projects --severity-threshold=medium
+    workspaces:
+    - name: source
+      workspace: source
+
+  - name: build-and-push
+    runAfter: ["snyk-code"]
+    taskRef:
+      resolver: bundles
+      params:
+      - name: name
+        value: buildah
+      - name: bundle
+        value: gcr.io/tekton-releases/catalog/upstream/buildah:0.8
+      - name: kind
+        value: task
+    params:
+    - name: IMAGE
+      value: ghcr.io/jkhelil/pac-demo:$(params.image_tag)
+    - name: DOCKERFILE
+      value: ./Dockerfile
+    - name: CONTEXT
+      value: .
+    - name: TLSVERIFY
+      value: "true"
+    workspaces:
+    - name: source
+      workspace: source
+    - name: dockerconfig
+      workspace: dockerconfig
+
+  - name: trivy-image-scan
+    runAfter: ["build-and-push"]
+    taskRef:
+      resolver: bundles
+      params:
+      - name: name
+        value: trivy-scanner
+      - name: bundle
+        value: gcr.io/tekton-releases/catalog/upstream/trivy-scanner:0.1
+      - name: kind
+        value: task
+    params:
+    - name: ARGS
+      value:
+      - image
+    - name: IMAGE_PATH
+      value: ghcr.io/jkhelil/pac-demo:$(params.image_tag)
+    workspaces:
+    - name: manifest-dir
+      workspace: source
+
+  - name: show-summary
+    runAfter: ["trivy-image-scan"]
+    taskRef:
+      resolver: bundles
+      params:
+      - name: name
+        value: summary
+      - name: bundle
+        value: gcr.io/tekton-releases/catalog/upstream/summary:0.2
+      - name: kind
+        value: task
+    params:
+    - name: pipelinerun-name
+      value: $(context.pipelineRun.name)
+    - name: git-url
+      value: $(tasks.clone.results.url)?rev=$(tasks.clone.results.commit)
+    - name: image-url
+      value: ghcr.io/jkhelil/pac-demo:$(params.image_tag)
+    workspaces:
+    - name: workspace
+      workspace: source
