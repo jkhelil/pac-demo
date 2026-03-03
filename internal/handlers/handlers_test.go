@@ -28,8 +28,10 @@ func TestGreet_Defaults(t *testing.T) {
 	}
 	var res map[string]string
 	_ = json.Unmarshal(rr.Body.Bytes(), &res)
-	if res["message"] != "Hello, world!" {
-		t.Fatalf("unexpected message: %q", res["message"])
+	// Assert against the package default so changing defaultGreetingPrefix for demos doesn't break the test
+	expected := defaultGreetingPrefix + ", world!"
+	if res["message"] != expected {
+		t.Fatalf("unexpected message: %q (expected %q)", res["message"], expected)
 	}
 }
 
@@ -69,4 +71,3 @@ func TestCalcSum_Valid(t *testing.T) {
 		t.Fatalf("unexpected sum: %v", res["sum"])
 	}
 }
-

@@ -28,12 +28,7 @@ make docker-build IMG=ghcr.io/jkhelil/pac-demo:dev
 ```bash
 kubectl create ns pac-demo
 
-# Registry auth for pushing images (ghcr.io)
-kubectl -n pac-demo create secret docker-registry ghcr-creds \
-  --docker-server=ghcr.io \
-  --docker-username=YOUR_GITHUB_USER \
-  --docker-password=$GHCR_PAT \
-  --docker-email=YOUR_EMAIL
+# Registry auth for pushing images (ghcr.io). Use ./hack/demo-setup.sh with GHCR_PAT and GITHUB_USER set, or create a secret with key config.json (Buildah expects that filename); see hack/demo-setup.sh for the format.
 
 # Snyk token for code scan task
 kubectl -n pac-demo create secret generic snyk-token \
@@ -48,7 +43,7 @@ kubectl -n pac-demo create secret generic snyk-token \
 tkn pac create repository
 ```
 
-4) Pipelines (in `.tekton/`):
+4) **Pipeline vs PipelineRuns:** The Pipeline definition is in `config/pipeline.yaml` (installed by `./hack/demo-setup.sh` into the demo namespace). The PAC-triggered PipelineRuns in `.tekton/` reference it via `pipelineRef`:
    - **pull_request**: `pipelinerun-pull-request.yaml` — runs on PRs targeting `main`; image tag `pr-<revision>`.
    - **push**: `pipelinerun-push.yaml` — runs on push to `main`; image tag `<revision>`.
 

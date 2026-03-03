@@ -10,7 +10,7 @@ import (
 )
 
 // Default greeting word when GREETING_PREFIX env is not set. Change this for demo PRs (e.g. "Hi", "Hey", "Welcome").
-const defaultGreetingPrefix = "Hello"
+const defaultGreetingPrefix = "Hi, Welcome to the Tekton pac demo"
 
 func Healthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)

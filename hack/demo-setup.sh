@@ -28,6 +28,23 @@ kubectl apply --filename "$TEKTON_PIPELINE_URL"
 echo "==> Installing Tekton Chains..."
 kubectl apply --filename "$TEKTON_CHAINS_URL"
 
+echo "==> Configuring Tekton Chains (OCI + in-toto + deep inspection for image signing)..."
+kubectl -n tekton-chains patch configmap chains-config --type=merge -p '{"data":{
+  "artifacts.oci.storage": "oci",
+  "artifacts.pipelinerun.format": "in-toto",
+  "artifacts.pipelinerun.storage": "oci",
+  "artifacts.pipelinerun.enable-deep-inspection": "true",
+  "artifacts.taskrun.format": "in-toto",
+  "artifacts.taskrun.storage": "oci"
+}}' 2>/dev/null || true
+
+if ! kubectl get secret signing-secrets -n tekton-chains &>/dev/null; then
+  echo "==> Generating Tekton Chains signing secret (cosign)..."
+  COSIGN_PASSWORD="${COSIGN_PASSWORD:-password}" cosign generate-key-pair k8s://tekton-chains/signing-secrets
+else
+  echo "==> Signing secret already exists in tekton-chains, skipping."
+fi
+
 echo "==> Installing Tekton Dashboard..."
 kubectl apply --filename "$TEKTON_DASHBOARD_URL"
 
@@ -55,19 +72,42 @@ echo "==> Creating namespace and pipeline resources (namespace: $NS)..."
 kubectl create namespace "$NS" 2>/dev/null || true
 kubectl create serviceaccount pipeline -n "$NS" 2>/dev/null || true
 
+echo "==> Installing Pipeline (config/build-and-push-pipeline.yaml) in $NS..."
+kubectl apply -f config/build-and-push-pipeline.yaml -n "$NS"
+
+# Chains (and Kubernetes) expect registry auth as type dockerconfigjson: that is the only type
+# that gets mounted as ~/.docker/config.json in pods (imagePullSecrets). Chains uses the
+# pipeline SA's credentials to push attestations to OCI; cosign/crane use the same format.
+DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker/config.json}"
+if [[ -f "$DOCKER_CONFIG" ]]; then
+  echo "==> Creating ghcr-configjson from $DOCKER_CONFIG (for Chains + pipeline SA)..."
+  kubectl -n "$NS" create secret docker-registry ghcr-configjson \
+    --from-file=.dockerconfigjson="$DOCKER_CONFIG" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl -n "$NS" patch serviceaccount pipeline -p '{"imagePullSecrets": [{"name": "ghcr-configjson"}]}' 2>/dev/null || true
+  kubectl -n "$NS" patch serviceaccount pipeline -p '{"secrets": [{"name": "ghcr-configjson"}]}' 2>/dev/null || true
+  echo "==> Linked ghcr-configjson to service account pipeline in $NS."
+else
+  echo "==> Skipping ghcr-configjson: $DOCKER_CONFIG not found. Run 'docker login ghcr.io' or create secret manually for Chains attestation push."
+fi
+
 if [[ -n "${GHCR_PAT:-}" ]]; then
   GITHUB_USER="${GITHUB_USER:-${GHCR_USERNAME:-}}"
   GHCR_EMAIL="${GHCR_EMAIL:-${EMAIL:-noreply@example.com}}"
   if [[ -z "$GITHUB_USER" ]]; then
     echo "==> Skipping ghcr-creds: set GITHUB_USER (or GHCR_USERNAME) and re-run, or create the secret manually."
   else
-    kubectl create secret docker-registry ghcr-creds -n "$NS" \
-      --docker-server=ghcr.io \
-      --docker-username="$GITHUB_USER" \
-      --docker-password="$GHCR_PAT" \
-      --docker-email="${GHCR_EMAIL}" \
+    # Buildah task expects the file to be named config.json (not .dockerconfigjson)
+    AUTH_B64="$(echo -n "${GITHUB_USER}:${GHCR_PAT}" | base64)"
+    DOCKER_JSON="{\"auths\":{\"ghcr.io\":{\"username\":\"${GITHUB_USER}\",\"password\":\"${GHCR_PAT}\",\"auth\":\"${AUTH_B64}\"}}}"
+    kubectl create secret generic ghcr-creds -n "$NS" \
+      --from-literal=config.json="$DOCKER_JSON" \
       --dry-run=client -o yaml | kubectl apply -f -
-    echo "==> Registry secret ghcr-creds created in $NS."
+    echo "==> Registry secret ghcr-creds created in $NS (config.json for buildah)."
+    # Link secret to pipeline service account (imagePullSecrets + secrets for pod access)
+    kubectl -n "$NS" patch serviceaccount pipeline -p '{"imagePullSecrets": [{"name": "ghcr-creds"}]}' 2>/dev/null || true
+    kubectl -n "$NS" patch serviceaccount pipeline -p '{"secrets": [{"name": "ghcr-creds"}]}' 2>/dev/null || true
+    echo "==> Linked ghcr-creds to service account pipeline in $NS."
   fi
 else
   echo "==> Skipping ghcr-creds: set GHCR_PAT (and GITHUB_USER) then re-run or create the secret manually."
