@@ -3,6 +3,7 @@
 Simple but non-trivial Go app for Pipelines-as-Code demo:
 - Endpoints: `/healthz`, `/version`, `/greet?name=NAME`, `POST /calc/sum` with `{"numbers":[...]}`.
 - Built with Tekton via PAC on **pull_request** and **push** to `main`; scans with Trivy (source+image) and Snyk (code).
+- For demo PRs: change `defaultGreetingPrefix` in `internal/handlers/handlers.go` (e.g. to "Hi", "Hey", "Welcome") to trigger a small, visible change per PR.
 
 ## Local build
 
