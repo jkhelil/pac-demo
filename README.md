@@ -15,7 +15,9 @@ make docker-build IMG=ghcr.io/jkhelil/pac-demo:dev
 
 ## Kind + Tekton + PAC quick notes
 
-1) Create cluster and install Tekton (pipelines, chains, dashboard) and PAC per docs:
+**Automated setup:** from repo root run `./hack/demo-setup.sh` to create the Kind cluster and install Tekton Pipeline, Chains, and Dashboard (and optionally PAC with `INSTALL_PAC=1 ./hack/demo-setup.sh`). Then follow the next steps printed by the script.
+
+1) Otherwise, create cluster and install Tekton (pipelines, chains, dashboard) and PAC per docs:
 - Getting started: https://pipelinesascode.com/docs/install/getting-started/
 
 2) **Secrets: create them in the cluster (not in GitHub).**  
