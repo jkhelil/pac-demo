@@ -1,4 +1,3 @@
-# Pipeline installed by CI/CD admin; PAC PipelineRuns reference it via pipelineRef.
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -14,6 +13,7 @@ spec:
   workspaces:
   - name: source
   - name: dockerconfig
+  - name: sbom
   tasks:
   - name: clone
     taskRef:
@@ -45,7 +45,7 @@ spec:
       - name: source
       steps:
       - name: go-test
-        image: golang:1.25
+        image: golang:1.25-alpine@sha256:f6751d823c26342f9506c03797d2527668d095b0a15f1862cddb4d927a7a4ced
         workingDir: /workspace/source
         script: |
           set -eu
@@ -61,7 +61,7 @@ spec:
       - name: source
       steps:
       - name: snyk
-        image: snyk/snyk:docker
+        image: snyk/snyk:docker@sha256:5031561bd647169eaa169d4ad8e7a9f61ede7ca4ed9d6a448894d499309da4de
         workingDir: /workspace/source
         env:
         - name: SNYK_TOKEN
@@ -116,7 +116,7 @@ spec:
       - name: dockerconfig
       steps:
       - name: scan
-        image: aquasec/trivy:latest
+        image: aquasec/trivy:0.52.0@sha256:c28826c9944b53ec9405bfd0efcf78a096e0970f38e4a2f0cdc62ea3fa0ea61e
         env:
         - name: DOCKER_CONFIG
           value: $(workspaces.dockerconfig.path)
@@ -129,26 +129,80 @@ spec:
     - name: dockerconfig
       workspace: dockerconfig
 
+  - name: generate-sbom
+    runAfter: ["trivy-image-scan"]
+    taskSpec:
+      params:
+      - name: IMAGE
+        type: string
+      - name: IMAGE_REF
+        description: Image reference with digest for attaching SBOM (IMAGE_URL@IMAGE_DIGEST)
+        type: string
+      workspaces:
+      - name: dockerconfig
+      - name: sbom
+      steps:
+      - name: sbom
+        image: aquasec/trivy:0.52.0@sha256:c28826c9944b53ec9405bfd0efcf78a096e0970f38e4a2f0cdc62ea3fa0ea61e
+        env:
+        - name: DOCKER_CONFIG
+          value: $(workspaces.dockerconfig.path)
+        script: |
+          set -eu
+          # Include vulnerabilities in SBOM so Trivy does not disable scanning (avoids INFO warning)
+          trivy image --format cyclonedx --scanners vuln --output /workspace/sbom/cyclonedx.json "$(params.IMAGE)"
+          trivy image --format spdx-json --scanners vuln --output /workspace/sbom/spdx.json "$(params.IMAGE)" || true
+          echo "SBOM written to workspace (cyclonedx.json, spdx.json)"
+      - name: upload-sbom
+        # Distroless image: no script, use args so cosign runs directly
+        image: ghcr.io/sigstore/cosign/cosign:v2.5.2@sha256:23d07b53d59a1233e1ab5e7d082cf4182fc90067d2f86a662ba3003215cb0c95
+        env:
+        - name: DOCKER_CONFIG
+          value: $(workspaces.dockerconfig.path)
+        args:
+        - attach
+        - sbom
+        - --sbom
+        - /workspace/sbom/cyclonedx.json
+        - --type
+        - cyclonedx
+        - $(params.IMAGE_REF)
+    params:
+    - name: IMAGE
+      value: ghcr.io/jkhelil/pac-demo:$(params.image_tag)
+    - name: IMAGE_REF
+      value: $(tasks.build-and-push.results.IMAGE_URL)@$(tasks.build-and-push.results.IMAGE_DIGEST)
+    workspaces:
+    - name: dockerconfig
+      workspace: dockerconfig
+    - name: sbom
+      workspace: sbom
+
   finally:
   - name: show-sbom
     taskSpec:
       params:
       - name: IMAGE_URL
         type: string
-      - name: IMAGE_DIGEST
-        type: string
+      workspaces:
+      - name: dockerconfig
       steps:
-      - name: sbom-info
-        image: alpine
-        script: |
-          echo "=== SBOM / Image info ==="
-          echo "Image: $(params.IMAGE_URL)"
-          echo "Digest: $(params.IMAGE_DIGEST)"
+      - name: show-sbom
+        # Distroless image: no script, use args. Omit --platform for single-arch images.
+        image: ghcr.io/sigstore/cosign/cosign:v2.5.2@sha256:23d07b53d59a1233e1ab5e7d082cf4182fc90067d2f86a662ba3003215cb0c95
+        env:
+        - name: DOCKER_CONFIG
+          value: $(workspaces.dockerconfig.path)
+        args:
+        - download
+        - sbom
+        - $(params.IMAGE_URL)
     params:
     - name: IMAGE_URL
       value: $(tasks.build-and-push.results.IMAGE_URL)
-    - name: IMAGE_DIGEST
-      value: $(tasks.build-and-push.results.IMAGE_DIGEST)
+    workspaces:
+    - name: dockerconfig
+      workspace: dockerconfig
   - name: show-summary
     taskSpec:
       params:
@@ -162,7 +216,7 @@ spec:
         type: string
       steps:
       - name: summary
-        image: alpine
+        image: alpine:3.19.0@sha256:13b7e62e8df80264dbb747995705a986aa530415763a6c58f84a3ca8af9a5bcd
         script: |
           echo "=== Pipeline summary ==="
           echo "PipelineRun: $(params.pipelinerun-name)"
