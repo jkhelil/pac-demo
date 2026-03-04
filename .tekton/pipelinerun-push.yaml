@@ -31,3 +31,10 @@ spec:
   - name: dockerconfig
     secret:
       secretName: ghcr-creds
+  - name: sbom
+    volumeClaimTemplate:
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 100Mi
