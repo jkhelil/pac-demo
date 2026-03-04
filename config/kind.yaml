@@ -4,7 +4,8 @@ name: tekton-cluster
 
 nodes:
   - role: control-plane
+    image: kindest/node:v1.29.2   # 👈 important
     extraPortMappings:
-      - containerPort: 30097   # must match your Service nodePort
+      - containerPort: 30097
         hostPort: 30097
         protocol: TCP

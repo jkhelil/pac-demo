@@ -1,0 +1,180 @@
+# Pipeline installed by CI/CD admin; PAC PipelineRuns reference it via pipelineRef.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build-and-push-pipeline
+spec:
+  params:
+  - name: git-repo
+    type: string
+  - name: git-revision
+    type: string
+  - name: image_tag
+    type: string
+  workspaces:
+  - name: source
+  - name: dockerconfig
+  tasks:
+  - name: clone
+    taskRef:
+      resolver: hub
+      params:
+      - name: catalog
+        value: tekton-catalog-tasks
+      - name: type
+        value: artifact
+      - name: name
+        value: git-clone
+      - name: version
+        value: "0.10.0"
+      - name: kind
+        value: task
+    params:
+    - name: url
+      value: $(params.git-repo)
+    - name: revision
+      value: $(params.git-revision)
+    workspaces:
+    - name: output
+      workspace: source
+
+  - name: unit-tests
+    runAfter: ["clone"]
+    taskSpec:
+      workspaces:
+      - name: source
+      steps:
+      - name: go-test
+        image: golang:1.25
+        workingDir: /workspace/source
+        script: |
+          set -eu
+          go test ./...
+    workspaces:
+    - name: source
+      workspace: source
+
+  - name: snyk-code
+    runAfter: ["unit-tests"]
+    taskSpec:
+      workspaces:
+      - name: source
+      steps:
+      - name: snyk
+        image: snyk/snyk:docker
+        workingDir: /workspace/source
+        env:
+        - name: SNYK_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: snyk-token
+              key: SNYK_TOKEN
+        script: |
+          set -eu
+          snyk code test --severity-threshold=medium || snyk test --all-projects --severity-threshold=medium
+    workspaces:
+    - name: source
+      workspace: source
+
+  - name: build-and-push
+    runAfter: ["snyk-code"]
+    taskRef:
+      resolver: hub
+      params:
+      - name: catalog
+        value: tekton-catalog-tasks
+      - name: type
+        value: artifact
+      - name: name
+        value: buildah
+      - name: version
+        value: "0.9"
+      - name: kind
+        value: task
+    params:
+    - name: IMAGE
+      value: ghcr.io/jkhelil/pac-demo:$(params.image_tag)
+    - name: DOCKERFILE
+      value: ./Dockerfile
+    - name: CONTEXT
+      value: .
+    - name: TLSVERIFY
+      value: "true"
+    workspaces:
+    - name: source
+      workspace: source
+    - name: dockerconfig
+      workspace: dockerconfig
+
+  - name: trivy-image-scan
+    runAfter: ["build-and-push"]
+    taskSpec:
+      params:
+      - name: IMAGE
+        type: string
+      workspaces:
+      - name: dockerconfig
+      steps:
+      - name: scan
+        image: aquasec/trivy:latest
+        env:
+        - name: DOCKER_CONFIG
+          value: $(workspaces.dockerconfig.path)
+        script: |
+          trivy image --exit-code 1 --severity CRITICAL,HIGH "$(params.IMAGE)"
+    params:
+    - name: IMAGE
+      value: ghcr.io/jkhelil/pac-demo:$(params.image_tag)
+    workspaces:
+    - name: dockerconfig
+      workspace: dockerconfig
+
+  finally:
+  - name: show-sbom
+    taskSpec:
+      params:
+      - name: IMAGE_URL
+        type: string
+      - name: IMAGE_DIGEST
+        type: string
+      steps:
+      - name: sbom-info
+        image: alpine
+        script: |
+          echo "=== SBOM / Image info ==="
+          echo "Image: $(params.IMAGE_URL)"
+          echo "Digest: $(params.IMAGE_DIGEST)"
+    params:
+    - name: IMAGE_URL
+      value: $(tasks.build-and-push.results.IMAGE_URL)
+    - name: IMAGE_DIGEST
+      value: $(tasks.build-and-push.results.IMAGE_DIGEST)
+  - name: show-summary
+    taskSpec:
+      params:
+      - name: pipelinerun-name
+        type: string
+      - name: git-url
+        type: string
+      - name: image-url
+        type: string
+      - name: build-task-status
+        type: string
+      steps:
+      - name: summary
+        image: alpine
+        script: |
+          echo "=== Pipeline summary ==="
+          echo "PipelineRun: $(params.pipelinerun-name)"
+          echo "Git: $(params.git-url)"
+          echo "Image: $(params.image-url)"
+          echo "Build task status: $(params.build-task-status)"
+    params:
+    - name: pipelinerun-name
+      value: $(context.pipelineRun.name)
+    - name: git-url
+      value: $(tasks.clone.results.url)?rev=$(tasks.clone.results.commit)
+    - name: image-url
+      value: ghcr.io/jkhelil/pac-demo:$(params.image_tag)
+    - name: build-task-status
+      value: $(tasks.build-and-push.status)

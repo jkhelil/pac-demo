@@ -1,4 +1,4 @@
 module github.com/jkhelil/pac-demo
 
-go 1.22
+go 1.25
 

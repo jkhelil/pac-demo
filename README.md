@@ -3,6 +3,7 @@
 Simple but non-trivial Go app for Pipelines-as-Code demo:
 - Endpoints: `/healthz`, `/version`, `/greet?name=NAME`, `POST /calc/sum` with `{"numbers":[...]}`.
 - Built with Tekton via PAC on **pull_request** and **push** to `main`; scans with Trivy (source+image) and Snyk (code).
+- For demo PRs: change `defaultGreetingPrefix` in `internal/handlers/handlers.go` (e.g. to "Hi", "Hey", "Welcome") to trigger a small, visible change per PR.
 
 ## Local build
 
@@ -14,7 +15,9 @@ make docker-build IMG=ghcr.io/jkhelil/pac-demo:dev
 
 ## Kind + Tekton + PAC quick notes
 
-1) Create cluster and install Tekton (pipelines, chains, dashboard) and PAC per docs:
+**Automated setup:** from repo root run `./hack/demo-setup.sh` to create the Kind cluster and install Tekton Pipeline, Chains, and Dashboard (and optionally PAC with `INSTALL_PAC=1 ./hack/demo-setup.sh`). Then follow the next steps printed by the script.
+
+1) Otherwise, create cluster and install Tekton (pipelines, chains, dashboard) and PAC per docs:
 - Getting started: https://pipelinesascode.com/docs/install/getting-started/
 
 2) **Secrets: create them in the cluster (not in GitHub).**  
@@ -25,12 +28,7 @@ make docker-build IMG=ghcr.io/jkhelil/pac-demo:dev
 ```bash
 kubectl create ns pac-demo
 
-# Registry auth for pushing images (ghcr.io)
-kubectl -n pac-demo create secret docker-registry ghcr-creds \
-  --docker-server=ghcr.io \
-  --docker-username=YOUR_GITHUB_USER \
-  --docker-password=$GHCR_PAT \
-  --docker-email=YOUR_EMAIL
+# Registry auth for pushing images (ghcr.io). Use ./hack/demo-setup.sh with GHCR_PAT and GITHUB_USER set, or create a secret with key config.json (Buildah expects that filename); see hack/demo-setup.sh for the format.
 
 # Snyk token for code scan task
 kubectl -n pac-demo create secret generic snyk-token \
@@ -45,7 +43,7 @@ kubectl -n pac-demo create secret generic snyk-token \
 tkn pac create repository
 ```
 
-4) Pipelines (in `.tekton/`):
+4) **Pipeline vs PipelineRuns:** The Pipeline definition is in `config/pipeline.yaml` (installed by `./hack/demo-setup.sh` into the demo namespace). The PAC-triggered PipelineRuns in `.tekton/` reference it via `pipelineRef`:
    - **pull_request**: `pipelinerun-pull-request.yaml` — runs on PRs targeting `main`; image tag `pr-<revision>`.
    - **push**: `pipelinerun-push.yaml` — runs on push to `main`; image tag `<revision>`.
 

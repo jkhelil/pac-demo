@@ -9,6 +9,9 @@ import (
 	"github.com/jkhelil/pac-demo/internal/version"
 )
 
+// Default greeting word when GREETING_PREFIX env is not set. Change this for demo PRs (e.g. "Hi", "Hey", "Welcome").
+const defaultGreetingPrefix = "Hi, Welcome to the Tekton pac demo"
+
 func Healthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok"))
@@ -28,7 +31,7 @@ func Greet(w http.ResponseWriter, r *http.Request) {
 	}
 	prefix := os.Getenv("GREETING_PREFIX")
 	if prefix == "" {
-		prefix = "Hello"
+		prefix = defaultGreetingPrefix
 	}
 	msg := fmt.Sprintf("%s, %s!", prefix, name)
 	w.Header().Set("Content-Type", "application/json")
@@ -60,4 +63,3 @@ func CalcSum(w http.ResponseWriter, r *http.Request) {
 		"sum": sum,
 	})
 }
-
