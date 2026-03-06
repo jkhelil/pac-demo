@@ -9,7 +9,7 @@ import (
 	"github.com/jkhelil/pac-demo/internal/version"
 )
 
-const defaultGreetingPrefix = "Hi, Welcome to Tekton Demo"
+const defaultGreetingPrefix = "Hi,"
 
 func Healthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
